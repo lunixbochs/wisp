@@ -163,19 +163,35 @@ class Mfsc(nn.Module):
         self.mel_filters = nn.Parameter(mel_filters('cpu', n_mels))
 
     def frame_signal(self, samples: torch.Tensor) -> torch.Tensor:
+        pad_size = self.frame_size // 2
+        samples = F.pad(samples.unsqueeze(0), (pad_size, pad_size), mode='reflect').squeeze(0)
         samples = samples.contiguous()
         shape = (int(1 + (len(samples) - self.frame_size) // self.frame_stride), self.frame_size)
         strides = (self.frame_stride, 1)
         return torch.as_strided(samples, shape, strides).clone()
 
     def power_spectrum(self, frames: torch.Tensor) -> torch.Tensor:
-        return torch.fft.rfft(frames * self.window, self.n_fft).abs()
+        return torch.fft.rfft(frames * self.window, self.n_fft).abs() ** 2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         frames = self.frame_signal(x)
         P = self.power_spectrum(frames)
+        P = P[:-1, :]
         mel_spec = self.mel_filters @ P.permute(1, 0)
         log_spec = torch.clamp(mel_spec, min=1e-10).log10()
         log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)
         log_spec = (log_spec + 4.0) / 4.0
         return log_spec
+
+if __name__ == '__main__':
+    feat = Mfsc(n_mels=80)
+
+    error = []
+    for i in range(10):
+        x = torch.randn(16_000)
+        y2 = log_mel_spectrogram(x)
+        y1 = feat(x)
+        error.append((y1 - y2).abs().max())
+
+    print(y1.shape, y2.shape)
+    print('error', torch.tensor(error).mean())
